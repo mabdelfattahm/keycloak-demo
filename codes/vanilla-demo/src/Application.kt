@@ -28,15 +28,8 @@ fun main(args: Array<String>): Unit = io.ktor.server.netty.EngineMain.main(args)
 @kotlin.jvm.JvmOverloads
 fun Application.module(testing: Boolean = false) {
     install(Locations)
-
-    if (!testing) {
-        install(HttpsRedirect) {
-            sslPort = 8765
-            permanentRedirect = true
-        }
-        install(ForwardedHeaderSupport)
-        install(XForwardedHeaderSupport)
-    }
+    install(ForwardedHeaderSupport)
+    install(XForwardedHeaderSupport)
 
     val keycloakOAuth = "keycloakOAuth"
     val keycloakAddress = environment.config.property("ktor.keycloak.path").getString()
@@ -55,7 +48,7 @@ fun Application.module(testing: Boolean = false) {
             client = HttpClient(Apache)
             providerLookup = { keycloakProvider }
             urlProvider = {
-                redirectUrl("/")
+                redirectUrl(environment.config.property("ktor.deployment.port").getString().toInt(),"/")
             }
         }
     }
@@ -96,13 +89,9 @@ fun Application.module(testing: Boolean = false) {
 }
 
 @KtorExperimentalLocationsAPI
-private fun <T : Any> ApplicationCall.redirectUrl(t: T, secure: Boolean = true): String {
-    val hostPort = request.host() + request.port().let { port -> if (port == 80) "" else ":$port" }
-    val protocol = when {
-        secure -> "https"
-        else -> "http"
-    }
-    return "$protocol://$hostPort${application.locations.href(t)}"
+private fun <T : Any> ApplicationCall.redirectUrl(p: Int, t: T, secure: Boolean = true): String {
+//    return "http://${request.host()}:$p${application.locations.href(t)}"
+    return "http://${request.host()}${application.locations.href(t)}"
 }
 
 private suspend fun ApplicationCall.loginFailedPage(errors: List<String>) {

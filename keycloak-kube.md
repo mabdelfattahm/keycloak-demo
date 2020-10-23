@@ -144,7 +144,7 @@ metadata:
 spec:
   rules:
   - host: keycloak.keeptrack.xyz
-  - http:
+    http:
       paths:
       - backend:
           serviceName: keycloak-http
@@ -221,6 +221,7 @@ echo "mirrors:
 ## Deploy Vanilla-OIDC app
 
 ```Bash
+kubectl create namespace apps
 echo "apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -240,8 +241,9 @@ spec:
       containers:
       - name: vanilla-oidc
         image: registry.keeptrack.xyz/vanilla-oidc
+        imagePullPolicy: Always
         ports:
-        - containerPort: 8765
+        - containerPort: 8080
 
 apiVersion: v1
 kind: Service
@@ -253,8 +255,8 @@ spec:
     app: vanilla-oidc
   ports:
     - protocol: TCP
-      port: 443
-      targetPort: 8765
+      port: 8080
+      targetPort: 8080
 
 apiVersion: networking.k8s.io/v1beta1
 kind: Ingress
@@ -266,11 +268,12 @@ metadata:
 spec:
   rules:
   - host: demo-a.keeptrack.xyz
-  - http:
+    http:
       paths:
       - backend:
           serviceName: vanilla-oidc-service
-          servicePort: 443"
+          servicePort: 8080" > vanilla-app.yaml
+kubectl create -f vanilla-app.yaml
 ```
 
 ---
