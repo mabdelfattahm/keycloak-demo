@@ -35,7 +35,13 @@ spec:
       enforced: true
       permanentRedirect: true
       generateTLS: true
-      defaultCN: keycloak.keeptrack.xyz
+      defaultCN: keycloak.keeptrack.xyz.209.182.238.54.nip.io
+      defaultSANList:
+        - keycloak.keeptrack.xyz.209.182.238.54.nip.io
+        - registry.keeptrack.xyz.209.182.238.54.nip.io
+        - demo-a.keeptrack.xyz.209.182.238.54.nip.io
+        - demo-b.keeptrack.xyz.209.182.238.54.nip.io
+
     metrics:
       prometheus:
         enabled: true
@@ -130,7 +136,7 @@ kubectl -n keycloak get services
 
 ## Expose Keycloak service using Ingress
 
-In this section, we are going to create an Ingress object for the `keycloak-http` service. Please update your local hosts file to include the entry `209.182.238.54 keycloak.keeptrack.xyz`.
+In this section, we are going to create an Ingress object for the `keycloak-http` service. We are using [nip.io](https://nip.io) as a simple DNS resolver for an IP.
 
 ``` Bash
 # Ingress for Keycloak
@@ -143,7 +149,7 @@ metadata:
     kubernetes.io/ingress.class: traefik
 spec:
   rules:
-  - host: keycloak.keeptrack.xyz
+  - host: keycloak.keeptrack.xyz.209.182.238.54.nip.io
     http:
       paths:
       - backend:
@@ -200,7 +206,7 @@ spec:
       annotations:
         kubernetes.io/ingress.class: traefik
       hosts:
-        - registry.keeptrack.xyz" > registry-chart.yaml
+        - registry.keeptrack.xyz.209.182.238.54.nip.io" > registry-chart.yaml
 cp registry-chart.yaml /var/lib/rancher/k3s/server/manifests/registry-chart.yaml
 ```
 
@@ -242,6 +248,9 @@ spec:
       - name: vanilla-oidc
         image: registry.keeptrack.xyz/vanilla-oidc
         imagePullPolicy: Always
+        env:
+          - name: KEYCLOAK_PATH
+            value: \"https://keycloak.keeptrack.xyz\"
         ports:
         - containerPort: 8080
 
@@ -267,13 +276,77 @@ metadata:
     kubernetes.io/ingress.class: traefik
 spec:
   rules:
-  - host: demo-a.keeptrack.xyz
+  - host: demo-a.keeptrack.xyz.209.182.238.54.nip.io
     http:
       paths:
       - backend:
           serviceName: vanilla-oidc-service
           servicePort: 8080" > vanilla-app.yaml
 kubectl create -f vanilla-app.yaml
+```
+
+This setup has introduced 2 problems, the first is the need to manually store the Traefik generated TLS certificate inside the Java trust-store. The other problem is that using the application behind Traefik reverse proxy has caused the redirect URL that was sent for verification on the Keycloak server to be different than the expected redirect URL.
+
+### Trials for fixing for Problem 1
+
+Using Let's Encrypt which is a nonprofit Certificate Authority providing TLS certificates for a lot of websites. In this example, we are going to use their staging environment to avoid the rate limiting.
+
+```Bash
+# Traefik configuration to use Let's Encrypt
+echo "apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: traefik
+  namespace: kube-system
+spec:
+  chart: stable/traefik
+  valuesContent: |-
+    rbac:
+      enabled: true
+    ssl:
+      enabled: true
+      enforced: true
+      sniStrict: true
+    acme:
+      enabled: true
+      email: mafattah@ergo.ch
+      domains:
+        enabled: true
+        domainsList:
+          - main: \"*.keeptrack.xyz.209.182.238.54.nip.io\"
+          - sans:
+              - \"keycloak.keeptrack.xyz.209.182.238.54.nip.io\"
+              - \"registry.keeptrack.xyz.209.182.238.54.nip.io\"
+              - \"demo-a.keeptrack.xyz.209.182.238.54.nip.io\"
+              - \"demo-b.keeptrack.xyz.209.182.238.54.nip.io\"
+              - \"traefik.keeptrack.xyz.209.182.238.54.nip.io\"
+      persistence:
+        storageClass: local-path
+    dashboard:
+      enabled: true
+      domain: traefik.keeptrack.xyz.209.182.238.54.nip.io
+      auth:
+        basic:
+          admin: $apr1$05o7v3mB$kuTMazoKD8MlAjpewllWw.
+      ingress:
+        tls:
+          - hosts:
+            - traefik.keeptrack.xyz.209.182.238.54.nip.io
+        annotations:
+          kubernetes.io/ingress.class: traefik
+    metrics:
+      prometheus:
+        enabled: true
+    kubernetes:
+      ingressEndpoint:
+        useDefaultPublishedService: true
+    tolerations:
+      - key: \"CriticalAddonsOnly\"
+        operator: \"Exists\"
+      - key: \"node-role.kubernetes.io/master\"
+        operator: \"Exists\"
+        effect: \"NoSchedule\"" > traefik-acme-chart.yaml
+cp traefik-acme-chart.yaml /var/lib/rancher/k3s/server/manifests/traefik-acme-chart.yaml
 ```
 
 ---
