@@ -162,7 +162,7 @@ kubectl create -f keycloak-http-ingress-host.yaml
 
 ## Configuring Keycloak
 
-The Keycloak app should be available at [keycloak.keeptrack.xyz](http://keycloak.ergo.ch/) and you can use the username and password defined in the configuration of the `Keycloak` Helm chart to login as admin in the admin console [Admin Console](http://keycloak.keeptrack.xyz/auth/admin/) .
+The Keycloak app should be available at [keycloak.keeptrack.xyz.209.182.238.54.nip.io](http://keycloak.ergo.ch/) and you can use the username and password defined in the configuration of the `Keycloak` Helm chart to login as admin in the admin console [Admin Console](http://keycloak.keeptrack.xyz/auth/admin/) .
 
 You can follow the rest of the setup at [Create a Keycloak realm](https://www.keycloak.org/getting-started/getting-started-kube#_create_a_realm).
 
@@ -219,7 +219,7 @@ Don't forget to add the registry to the list of Docker insecure repositories. Yo
 ```Bash
 DOCKER_REGISTRY_IP=$(kubectl -n kube-system get service/docker-registry -o=jsonpath='{.spec.clusterIP}')
 echo "mirrors:
-  keeptrack.xyz:
+  registry.keeptrack.xyz.209.182.238.54.nip.io:
     endpoint:
       - \"http://$DOCKER_REGISTRY_IP:5000\"" > /etc/rancher/k3s/registries.yaml
 ```
@@ -246,15 +246,15 @@ spec:
     spec:
       containers:
       - name: vanilla-oidc
-        image: registry.keeptrack.xyz/vanilla-oidc
+        image: registry.keeptrack.xyz.209.182.238.54.nip.io/vanilla-oidc
         imagePullPolicy: Always
         env:
           - name: KEYCLOAK_PATH
-            value: \"https://keycloak.keeptrack.xyz\"
+            value: \"https://keycloak.keeptrack.xyz.209.182.238.54.nip.io\"
         ports:
-        - containerPort: 8080
+        - containerPort: 8080" > vanilla-deployemnt.yaml
 
-apiVersion: v1
+echo "apiVersion: v1
 kind: Service
 metadata:
   name: vanilla-oidc-service
@@ -265,12 +265,12 @@ spec:
   ports:
     - protocol: TCP
       port: 8080
-      targetPort: 8080
+      targetPort: 8080" > vanilla-service.yaml
 
-apiVersion: networking.k8s.io/v1beta1
+echo "apiVersion: networking.k8s.io/v1beta1
 kind: Ingress
 metadata:
-  name: vanilla-oidc-app
+  name: vanilla-oidc-ingress
   namespace: apps
   annotations:
     kubernetes.io/ingress.class: traefik
@@ -281,13 +281,18 @@ spec:
       paths:
       - backend:
           serviceName: vanilla-oidc-service
-          servicePort: 8080" > vanilla-app.yaml
-kubectl create -f vanilla-app.yaml
+          servicePort: 8080" > vanilla-ingress.yaml
+kubectl create -f vanilla-deployment.yaml -f vanilla-service.yaml -f vanilla-ingress.yaml
 ```
 
-This setup has introduced 2 problems, the first is the need to manually store the Traefik generated TLS certificate inside the Java trust-store. The other problem is that using the application behind Traefik reverse proxy has caused the redirect URL that was sent for verification on the Keycloak server to be different than the expected redirect URL.
+## Problems with this setup
 
-### Trials for fixing for Problem 1
+This setup has introduced 2 problems:
+
+- The need to manually store the Traefik generated TLS certificate inside the Java trust-store.
+- Using the application behind Traefik reverse proxy has caused the redirect URL sent with the OAuth request to the Keycloak server to be different than the expected redirect URL.
+
+### Solution for Problem 1
 
 Using Let's Encrypt which is a nonprofit Certificate Authority providing TLS certificates for a lot of websites. In this example, we are going to use their staging environment to avoid the rate limiting.
 
@@ -348,6 +353,10 @@ spec:
         effect: \"NoSchedule\"" > traefik-acme-chart.yaml
 cp traefik-acme-chart.yaml /var/lib/rancher/k3s/server/manifests/traefik-acme-chart.yaml
 ```
+
+### Solution for problem 2
+
+Fix have been applied to the application source code to use the `X-Forwarded` headers instead of normal headers.
 
 ---
 

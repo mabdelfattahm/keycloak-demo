@@ -48,7 +48,7 @@ fun Application.module(testing: Boolean = false) {
             client = HttpClient(Apache)
             providerLookup = { keycloakProvider }
             urlProvider = {
-                redirectUrl(environment.config.property("ktor.deployment.port").getString().toInt(),"/")
+                redirectUrl(environment.config.property("ktor.deployment.port").getString(),"/")
             }
         }
     }
@@ -89,9 +89,13 @@ fun Application.module(testing: Boolean = false) {
 }
 
 @KtorExperimentalLocationsAPI
-private fun <T : Any> ApplicationCall.redirectUrl(p: Int, t: T, secure: Boolean = true): String {
-//    return "http://${request.host()}:$p${application.locations.href(t)}"
-    return "http://${request.host()}${application.locations.href(t)}"
+private fun <T : Any> ApplicationCall.redirectUrl(p: String, t: T, secure: Boolean = true): String {
+    val protocol = request.header("X-Forwarded-Proto") ?: "http"
+    val host = request.header("X-Forwarded-Host") ?: request.host()
+    val port = request.header("X-Forwarded-Port") ?: p
+    val url = "$protocol://$host:$port${application.locations.href(t)}"
+    println("RedirectURL: $url")
+    return url
 }
 
 private suspend fun ApplicationCall.loginFailedPage(errors: List<String>) {
