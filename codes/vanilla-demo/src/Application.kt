@@ -13,12 +13,19 @@ import io.ktor.locations.*
 import io.ktor.response.*
 import io.ktor.request.*
 import io.ktor.routing.*
+import io.ktor.sessions.*
 import io.ktor.util.*
 import kotlinx.html.*
 import org.json.simple.JSONObject
 
 fun main(args: Array<String>): Unit = io.ktor.server.netty.EngineMain.main(args)
 
+@KtorExperimentalLocationsAPI
+@Location("/authorization-callback") class AuthorizationCallback
+@KtorExperimentalLocationsAPI
+@Location("/login") class Login
+@KtorExperimentalLocationsAPI
+@Location("/logout") class Logout
 @KtorExperimentalLocationsAPI
 @Location("/") class Index
 
@@ -27,12 +34,25 @@ fun main(args: Array<String>): Unit = io.ktor.server.netty.EngineMain.main(args)
 @Suppress("unused") // Referenced in application.conf
 @kotlin.jvm.JvmOverloads
 fun Application.module(testing: Boolean = false) {
+
+    install(Sessions) {
+        cookie<UserSession>("MY_SESSION", SessionStorageMemory()) {
+            val secretEncryptKey = hex("657965532F412E385829672E30253173")
+            val secretAuthKey = hex("8FBB4855EF323")
+            cookie.extensions["SameSite"] = "lax"
+            cookie.httpOnly = true
+            transform(SessionTransportTransformerEncrypt(secretEncryptKey, secretAuthKey))
+        }
+    }
     install(Locations)
     install(ForwardedHeaderSupport)
     install(XForwardedHeaderSupport)
 
+    val port = environment.config.property("ktor.deployment.port").getString()
     val keycloakOAuth = "keycloakOAuth"
     val keycloakAddress = environment.config.property("ktor.keycloak.path").getString()
+    val userUrl = "$keycloakAddress/auth/realms/demo/account"
+    val logoutUrl = "$keycloakAddress/auth/realms/demo/protocol/openid-connect/logout"
     val keycloakProvider = OAuthServerSettings.OAuth2ServerSettings(
         name = "keycloak",
         authorizeUrl = "$keycloakAddress/auth/realms/demo/protocol/openid-connect/auth",
@@ -40,7 +60,7 @@ fun Application.module(testing: Boolean = false) {
         clientId = "demo",
         clientSecret = "0b663c27-7f8e-49c9-8e8a-e4d8923ed316",
         requestMethod = HttpMethod.Post,
-        defaultScopes = listOf("roles")
+        defaultScopes = listOf("roles", "openid")
     )
 
     install(Authentication) {
@@ -48,34 +68,122 @@ fun Application.module(testing: Boolean = false) {
             client = HttpClient(Apache)
             providerLookup = { keycloakProvider }
             urlProvider = {
-                redirectUrl(environment.config.property("ktor.deployment.port").getString(),"/")
+                redirectUrl(port,AuthorizationCallback())
             }
         }
     }
 
     routing {
         authenticate(keycloakOAuth) {
-            location<Index> {
-                param("error") {
-                    handle {
-                        call.loginFailedPage(call.parameters
-                                .getAll("error").orEmpty())
-                    }
-                }
 
+            location<Login> {
                 handle {
-                    val principal =
-                        call.authentication
-                            .principal<OAuthAccessTokenResponse.OAuth2>()
+                    call.respondRedirect("/")
+                }
+            }
+
+            location<AuthorizationCallback> {
+                handle {
+                    val principal = call.authentication.principal<OAuthAccessTokenResponse.OAuth2>()
                     if (principal != null) {
-                        call.loggedInSuccessResponse(principal)
+                        val idTokenString = principal.extraParameters["id_token"] ?: throw Exception("id_token wasn't returned")
+                        val idToken = JWT.decode(idTokenString)
+                        val fullName = idToken.claims["preferred_username"]?.asString() ?: "Unknown name"
+                        val session = UserSession(fullName, idTokenString)
+                        call.sessions.set(session)
+                        call.respondRedirect(call.redirectUrl(port, Index()))
                     } else {
-                        call.respond(HttpStatusCode.Unauthorized)
+                        call.respondHtml {
+                            head {
+                                title { +"Login failed" }
+                            }
+                            body {
+                                h1 {
+                                    +"Login error"
+                                }
+                                call.parameters.getAll("error")?.forEach {
+                                    p {
+                                        + it
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
         }
 
+        location<Logout> {
+            handle {
+                val token = call.sessions.get<UserSession>()?.token
+                call.sessions.clear<UserSession>()
+                val redirectLogout = when (token) {
+                    null -> "/"
+                    else -> URLBuilder(logoutUrl).run {
+                        parameters.append("post_logout_redirect_uri", call.redirectUrl(port, Index()))
+                        parameters.append("id_token_hint", token)
+                        buildString()
+                    }
+                }
+                call.respondRedirect(redirectLogout)
+            }
+        }
+
+        location<Index> {
+            handle {
+                val session = call.sessions.get<UserSession>()
+                if (session?.username == null) {
+                    call.respondHtml {
+                        head {
+                            title { +"Not Logged in" }
+                        }
+                        body {
+                            h1 {
+                                + "No User is Logged In"
+                            }
+                            h2 {
+                                + "Please Login!"
+                            }
+                            a("/login", ) {
+                                + "Login"
+                            }
+                        }
+                    }
+                } else {
+                    val decoded =  JWT.decode(session.token)
+                    val name = decoded.getClaim("preferred_username").asString()
+                    call.respondHtml {
+                        head {
+                            title { +"Logged in" }
+                        }
+                        body {
+                            h1 {
+                                + "Login successful!"
+                            }
+                            h2 {
+                                + "Welcome $name!"
+                            }
+                            a(userUrl) {
+                                + "User portal"
+                            }
+                            p {
+                                + "Your claims are:"
+                            }
+                            ul{
+                                decoded.claims.forEach { (k,v) ->
+                                    li {
+                                        + "$k: ${v.stringValue()}"
+                                    }
+                                }
+                            }
+                            a("logout") {
+                                + "Logout"
+                            }
+                        }
+                    }
+                }
+            }
+        }
         install(StatusPages) {
             exception<AuthenticationException> {
                 call.respond(HttpStatusCode.Unauthorized)
@@ -83,7 +191,6 @@ fun Application.module(testing: Boolean = false) {
             exception<AuthorizationException> {
                 call.respond(HttpStatusCode.Forbidden)
             }
-
         }
     }
 }
@@ -93,60 +200,7 @@ private fun <T : Any> ApplicationCall.redirectUrl(p: String, t: T, secure: Boole
     val protocol = request.header("X-Forwarded-Proto") ?: "http"
     val host = request.header("X-Forwarded-Host") ?: request.host()
     val port = request.header("X-Forwarded-Port") ?: p
-    val url = "$protocol://$host:$port${application.locations.href(t)}"
-    println("RedirectURL: $url")
-    return url
-}
-
-private suspend fun ApplicationCall.loginFailedPage(errors: List<String>) {
-    respondHtml {
-        head {
-            title { +"Login failed" }
-        }
-        body {
-            h1 {
-                +"Login error"
-            }
-
-            for (e in errors) {
-                p {
-                    +e
-                }
-            }
-        }
-    }
-}
-
-private suspend fun ApplicationCall.loggedInSuccessResponse(callback: OAuthAccessTokenResponse.OAuth2) {
-    val jwtToken = callback.accessToken
-    val token =  JWT.decode(jwtToken)
-    val name = token.getClaim("preferred_username").asString()
-
-    respondHtml {
-        head {
-            title { +"Logged in" }
-        }
-        body {
-            h1 {
-                + "Login successful!"
-            }
-            h2 {
-                + "Welcome $name!"
-            }
-
-            p {
-                + "Your claims are:"
-            }
-
-            ul{
-                token.claims.forEach { (k,v) ->
-                    li {
-                        + "$k: ${v.stringValue()}"
-                    }
-                }
-            }
-        }
-    }
+    return "$protocol://$host:$port${application.locations.href(t)}"
 }
 
 private fun Claim.stringValue(): String {
