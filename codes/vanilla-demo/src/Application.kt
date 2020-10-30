@@ -144,7 +144,7 @@ fun Application.module(testing: Boolean = false) {
                             h2 {
                                 + "Please Login!"
                             }
-                            a("/login", ) {
+                            a("/login") {
                                 + "Login"
                             }
                         }
