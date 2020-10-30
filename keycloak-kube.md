@@ -285,14 +285,14 @@ spec:
 kubectl create -f vanilla-deployment.yaml -f vanilla-service.yaml -f vanilla-ingress.yaml
 ```
 
-## Problems with this setup
+### Problems with this setup
 
 This setup has introduced 2 problems:
 
 - The need to manually store the Traefik generated TLS certificate inside the Java trust-store.
 - Using the application behind Traefik reverse proxy has caused the redirect URL sent with the OAuth request to the Keycloak server to be different than the expected redirect URL.
 
-### Solution for Problem 1
+#### Solution for Problem 1
 
 Using Let's Encrypt which is a nonprofit Certificate Authority providing TLS certificates for a lot of websites. In this example, we are going to use their staging environment to avoid the rate limiting.
 
@@ -354,9 +354,73 @@ spec:
 cp traefik-acme-chart.yaml /var/lib/rancher/k3s/server/manifests/traefik-acme-chart.yaml
 ```
 
-### Solution for problem 2
+#### Solution for problem 2
 
 Fix have been applied to the application source code to use the `X-Forwarded` headers instead of normal headers.
+
+---
+
+## Deploying Spring Boot Application with Keycloak
+
+Building on findings from the vanilla app deployment we can create the deployment configuration for the Spring Boot app. This app uses `keycloak-spring-boot-starter` which makes the configuration for the endpoints easy (using properties files) and does not require adding Spring-Security to the list of dependencies.
+
+```Bash
+echo "apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: keycloak-spring-boot-deployment
+  namespace: apps
+  labels:
+    app: keycloak-spring-boot
+spec:
+  selector:
+    matchLabels:
+      app: keycloak-spring-boot
+  template:
+    metadata:
+      labels:
+        app: keycloak-spring-boot
+    spec:
+      containers:
+      - name: spring-demo
+        image: registry.keeptrack.xyz.209.182.238.54.nip.io/spring-demo
+        imagePullPolicy: Always
+        env:
+          - name: KEYCLOAK_PATH
+            value: \"https://keycloak.keeptrack.xyz.209.182.238.54.nip.io/auth\"
+        ports:
+        - containerPort: 8080" > keycloak-spring-boot-deployment.yaml
+
+echo "apiVersion: v1
+kind: Service
+metadata:
+  name: keycloak-spring-boot-service
+  namespace: apps
+spec:
+  selector:
+    app: keycloak-spring-boot
+  ports:
+    - protocol: TCP
+      port: 8081
+      targetPort: 8081" > keycloak-spring-boot-service.yaml
+
+echo "apiVersion: networking.k8s.io/v1beta1
+kind: Ingress
+metadata:
+  name: keycloak-spring-boot-ingress
+  namespace: apps
+  annotations:
+    kubernetes.io/ingress.class: traefik
+spec:
+  rules:
+  - host: demo-b.keeptrack.xyz.209.182.238.54.nip.io
+    http:
+      paths:
+      - backend:
+          serviceName: keycloak-spring-boot-service
+          servicePort: 8081" > keycloak-spring-boot-ingress.yaml
+kubectl create -f keycloak-spring-boot-deployment.yaml -f keycloak-spring-boot-service.yaml -f keycloak-spring-boot-ingress.yaml
+```
 
 ---
 
